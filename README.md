@@ -1,36 +1,10 @@
-# langstroth-server
+# Langstroth
 
-FIXME: description
-
-## Installation
-
-Download from http://example.com/FIXME.
-
-## Usage
-
-FIXME: explanation
-
-    $ java -jar langstroth-server-0.1.0-standalone.jar [args]
-
-## Options
-
-FIXME: listing of options this app accepts.
-
-## Examples
-
-...
-
-### Bugs
-
-...
-
-### Any Other Sections
-### That You Think
-### Might be Useful
+Server to accept uploads from [Langstroth](https://github.com/afandian/langstroth) Android app.
 
 ## License
 
-Copyright © 2015 FIXME
+Copyright © 2015 Joe Wass
 
 Distributed under the Eclipse Public License either version 1.0 or (at
 your option) any later version.
