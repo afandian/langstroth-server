@@ -2,6 +2,8 @@
 
 Server to accept uploads from [Langstroth](https://github.com/afandian/langstroth) Android app.
 
+Work in progress.
+
 ## License
 
 Copyright © 2015 Joe Wass
