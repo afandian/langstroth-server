@@ -11,6 +11,7 @@
 
     <title>Langstroth</title>
     <link href="css/bootstrap.min.css" rel="stylesheet">
+    <link href="dist/datetimepicker-master/jquery.datetimepicker.css" rel="stylesheet">
     <link href="style.css" rel="stylesheet">
   </head>
 
@@ -22,39 +23,217 @@
         <p class="lead">Beehive Timelapse Listener</p>
       </div>
 
-      
       <div class="row">
         <div class="col-md-12">
           <form role="form">
+            <input type="hidden" name="user" id="user">
+            <input type="hidden" name="entity" id="entity">
             <label>
               Start
-              <input name="start" type="datetime-local"> 
+              <input name="start" id="start" type="text"> 
             </label>
             <label>
               End
-              <input name="start" type="datetime-local"> 
+              <input name="end" id="end" type="text"> 
             </label>
             <label>Every
-            <select>
-              <option>5 minutes</option>
-              <option>10 minutes</option>
-              <option>15 minutes</option>
-              <option>30 minutes</option>
-              <option>1 hour</option>
-              <option>1 day</option>
+            <select name="skip" id="skip">
+              <option value="300000">5 minutes</option>
+              <option value="600000">10 minutes</option>
+              <option value="900000">15 minutes</option>
+              <option value="1800000">30 minutes</option>
+              <option value="3600000">1 hour</option>
+              <option value="86400000">1 day</option>
             </select>
             </label>
-            <label>
-              Slices of
-              <select>
-              <option>1 second</option>
-              <option>5 seconds</option>
-              <option>10 seconds</option>
-            </select>
-            </label>
+            <button>Submit</button>
           </form>
+
+          <div>
+          <!-- <img src="/spectrograms/JOE/1/timelapse?start=1430812596067&end=1430850182562&skip=400000" style="width: 944px">
+          </div>
+          <div>
+          <audio controls src="/recordings/JOE/1/timelapse?start=1430812596067&end=1430850182562&skip=400000" style="width: 944px">
+          </audio> -->
+
+          <img id="spectrogram" style="width: 944px">
+          </div>
+          <div>
+          <audio controls id="recording" style="width: 944px"></audio>
+          </div>
         </div>
       </div>
     </div>  
+    <script src="http://code.jquery.com/jquery-2.1.4.min.js"></script>
+    <script src="dist/datetimepicker-master/jquery.datetimepicker.js"></script>
+    <script src="dist/moment.js"></script>
+    <script>
+
+      function getQueryParams(qs) {
+        qs = qs.split("+").join(" ");
+        var params = {}, tokens, re = /[?&]?([^=]+)=([^&]*)/g;
+        while (tokens = re.exec(qs)) {
+            params[decodeURIComponent(tokens[1])] = decodeURIComponent(tokens[2]);
+        }
+
+        return params;
+      } 
+
+      function formatDate(date) {
+        var day = date.getDate();
+        var month = date.getMonth() + 1;
+        var year = date.getFullYear();
+        return date + "-" + month + "-" + year;
+      }
+ 
+ 
+      $(function(){
+        var $start = $("#start");
+        var $end = $("#end");
+        var $skip = $("#skip");
+        var $user = $("#user");
+        var $entity = $("#entity");
+        var $recording = $("#recording");
+        var $spectrogram = $("#spectrogram");
+
+        $start.datetimepicker();
+        $end.datetimepicker();
+
+        // Set initial values from URL params if supplied.
+        var params = getQueryParams(window.location.search)
+
+        var ok = true;
+        var unworkable = false;
+
+        if (params.start !== undefined && params.start !== "") {
+          $start.val(params.start);
+        } else {
+          ok = false;
+        }
+
+        if (params.end !== undefined && params.end !== "") {
+          $end.val(params.end);
+        } else {
+          ok = false;
+        }
+
+        if (params.user !== undefined && params.user !== "") {
+          $user.val(params.user);
+        } else {
+          ok = false;
+          unworkable = true;
+        }
+
+        // We need an entity and user in order to proceed.
+        if (params.entity !== undefined && params.entity !== "") {
+          $entity.val(params.entity);
+        } else {
+          ok = false;
+          unworkable = true;
+        }
+
+        if (params.skip !== undefined && params.skip !== "" && parseInt(params.skip) !== NaN) {
+          $skip.val(params.skip);
+        } else {
+          ok = false;
+        }
+
+        var update = function(start, end, skip, user, entity) {
+          var params = $.param({start: start, end: end, skip: skip});
+
+          var spectrogram = "/spectrograms/" + user + "/" + entity + "/timelapse?" + params;
+          var recording = "/recordings/" + user + "/" + entity + "/timelapse?" + params;
+
+          
+          $.get(spectrogram).success(function() {
+            $spectrogram.prop("src", spectrogram);
+            $recording.prop("src", recording);
+          }).fail(function(response) {
+            switch (response.status) {
+              case 400: alert("bad request"); break;
+              case 404: alert("no data found"); break;
+              case 500: alert("you broke the server"); break;
+            }
+          });
+        };
+
+        // Got all the info we need, fetch!
+        var fetch = function() {
+          // Before we do anything, make sure we're not going to make an invalid request.
+          updateSkip();
+
+          // Millisconds for API.
+          var start = new Date($start.val()).getTime();
+          var end = new Date($end.val()).getTime();
+
+          var skip = $skip.val();
+
+          var user = $user.val();
+          var entity = $entity.val();
+
+          update(start, end, skip, user, entity);  
+        };
+
+        // Don't have time values, need to get them.
+        var fetchDefaults = function() {
+          var user = $user.val();
+          var entity = $entity.val();
+
+          $.get("/recordings/" + user + "/" + entity).success(function(data) {
+            var start = new Date(data.earliest);
+            var end = new Date(data.latest);
+            
+            $start.val(moment(start).format("YYYY/MM/DD HH:mm"));
+            $end.val(moment(end).format("YYYY/MM/DD HH:mm"));
+
+            fetch();
+          });
+        }
+
+        // Automatically update skip based on time period.
+        var updateSkip = function() {
+          var maxSliceCount = 120;
+
+          var start = new Date($start.val()).getTime();
+          var end = new Date($end.val()).getTime();
+
+          var duration = end - start;
+
+          var currentSkipDuration = parseInt($skip.val());
+          
+          // Only change if there's a problem.
+          if ((duration / currentSkipDuration) <= maxSliceCount) {
+            return;
+          }
+
+          var availableSkipDurations =  $skip.children().map(
+            function(i, child) {
+              return parseInt($(child).prop("value"))
+            }).sort(function(a, b){return a - b});
+
+          var skipDuration;
+          for (i = 0; i < availableSkipDurations.length; i++) {
+            skipDuration = availableSkipDurations[i];
+              console.log(skipDuration, (duration / skipDuration))
+              if ((duration / skipDuration) <= maxSliceCount) {
+                break;
+              }
+            
+          }
+
+          // TODO error if unrecoverable?
+
+          $skip.val(skipDuration.toString());
+
+                    
+        };
+
+        if (!ok & !unworkable) {
+            fetchDefaults();
+          } else {
+            fetch();
+          }
+      });
+    </script>
   </body>
 </html>

@@ -12,11 +12,14 @@
   (:require [clojure.core.async :refer [chan >! >!! <! <!! go]])
   (:gen-class))
 
-(def config {:port 6060 :storage-dir "/tmp/langstroth"})
+(def config {:port 6060 :storage-dir "/Users/joe/personal/langstroth-storage"})
 
 (def cred {:username "joe" :password "joe"})
 
 (def process-queue (chan 1000))
+
+(def max-slice-count 121)
+
 
 (defn shell [args]
   (prn "Shell" args)
@@ -27,14 +30,17 @@
   "Convert the file to MP3"
   [f]
   (let [wav-filename (.getAbsolutePath f)
-        mp3-filename (str (.substring wav-filename 0 (- (.length wav-filename) 4)) ".short.wav")]
+        output-filename (str (.substring wav-filename 0 (- (.length wav-filename) 4)) ".short.wav")]
     (prn "Convert " wav-filename)
     ; Trim one second's worth. 
     ; Microphone input seems to be doing some auto-calibrating in the first second.
-    (shell ["sox" wav-filename mp3-filename "trim" "3" "1"])
-    (let [mp3-file (new File mp3-filename)]
-      (when (.exists mp3-file)
-        (.delete f)))))
+    (shell ["sox" wav-filename output-filename "trim" "3" "1"])
+    (let [output-file (new File output-filename)]
+      (when (.exists output-file)
+        (.delete f)
+        ; Rename back to original filename.
+        (.renameTo output-file (new File wav-filename))
+        ))))
   
 (defn start-process-queue []
   (go
@@ -45,6 +51,15 @@
           (do 
             (process-file f)
             (recur (<! process-queue)))))))
+
+(defn parse-int [input]
+  (try 
+    (new BigInteger input)
+  (catch NumberFormatException _ nil)))
+
+(defn abs [n] (max n (- n)))
+
+
 
 (defn authorized-handler
   "Return user id if logged in."
@@ -82,18 +97,11 @@
               (>!! process-queue f)
               true)))
 
-(defn parse-int [input]
-  (try 
-    (new BigInteger input)
-  (catch NumberFormatException _ nil)))
-
-(defn abs [n] (max n (- n)))
-
 (defn nearest
   "For list of files with timestamp filenames, find the nearest."
   [sought items]
-  (let [with-distances (map (fn [[timestamp duration f]]
-                              [(abs (- sought timestamp)) [timestamp duration f]]) items)
+  (let [with-distances (map (fn [[timestamp f]]
+                              [(abs (- sought timestamp)) [timestamp f]]) items)
         best (first (sort-by first with-distances))]
     (second best)))
 
@@ -104,30 +112,25 @@
     (if (.exists output)
       output
       (let [files (.listFiles (new File (new File (:storage-dir config)) (str "recordings/" user "/" entity)))
-            files (filter #(.endsWith (.getName %) ".mp3") files)
-            filename-durations (map (fn [f]
+            files (filter #(.endsWith (.getName %) ".wav") files)
+            filenames (map (fn [f]
                                       (let [nom (.getName f)
-                                            nom (.substring nom 0 (- (.length nom) 4))
-                                            parts (.split nom "-")
-                                            timestamp-str (first parts)
-                                            duration-str (second parts)
-                                            timestamp (parse-int timestamp-str)
-                                            duration (parse-int duration-str)]
-                                        [timestamp duration f])) files)
-            interested (filter #(and (>= (first %) start) (<= (first %) end)) filename-durations)
-           
-            time-range (range start end skip)
-           
-            nearest (map #(nearest % interested) time-range)
-           
-            paths (map (fn [[_ _ file]] (.getAbsolutePath file)) nearest)
-            
-            ; TODO could use ffmpeg and use an unlimited number of input files
-            concat-command (concat ["sox" "--combine" "concatenate"] paths [(str (.getAbsolutePath output))])]
+                                            timestamp-str (.substring nom 0 (- (.length nom) 4))
+                                            timestamp (parse-int timestamp-str)]
+                                        [timestamp f])) files)
+            interested (filter #(and (>= (first %) start) (<= (first %) end)) filenames)]
+        (when (not (empty? interested))
+          (let [time-range (range start end skip)
+               
+                nearest (map #(nearest % interested) time-range)
+                paths (map (fn [[_ file]] (.getAbsolutePath file)) nearest)
+                
+                ; TODO could use ffmpeg and use an unlimited number of input files
+                concat-command (concat ["sox" "--combine" "concatenate"] paths [(str (.getAbsolutePath output))])]
 
-        (.mkdirs (.getParentFile output))
-        (shell concat-command)
-        output))))
+            (.mkdirs (.getParentFile output))
+            (shell concat-command)
+            output))))))
 
 (defn generate-spectrogram
   "Generate spectrogram from mp3"
@@ -148,12 +151,11 @@
                                          :hours (str (int (/ duration-minutes 60)) " hours")
                                          :days (str (int (/ duration-minutes (* 60 24))) " days")))
             
-            spectrogram-command ["sox" (str (.getAbsolutePath input-f)) "-n" "spectrogram" "-t" title "-o" (str (.getAbsolutePath output))]]
+            spectrogram-command ["sox" (str (.getAbsolutePath input-f)) "-n" "spectrogram" "-l" "-t" title "-o" (str (.getAbsolutePath output))]]
     (.mkdirs (.getParentFile output))
     (shell spectrogram-command)
     output))))
 
-(def max-slice-count 50)
 
 (defresource timelapse-recording
   [user entity]
@@ -167,13 +169,15 @@
                       ; Can be solved by upping the skip.
                       acceptable-slice-count (< (/ (- end start) skip) max-slice-count)]
                           (prn (float (/ (- end start) skip)))
-                          [(not (and start end skip acceptable-slice-count))
+                          [(not (and start end skip acceptable-slice-count (> end start) ))
                            {::start start ::end end ::skip skip}]))
-  :handle-ok (fn [ctx] (let [start (::start ctx)
+  :exists? (fn [ctx] (let [start (::start ctx)
                              end (::end ctx)
                              skip (::skip ctx)
                              output-f (generate-splice user entity start end skip)]
-            (new FileInputStream output-f))))
+                       ; May return nil if nothing matched.
+                       [output-f {::output-f output-f}]))
+  :handle-ok (fn [ctx] (new FileInputStream (::output-f ctx))))
 
 (defresource timelapse-spectrogram
   [user entity]
@@ -189,14 +193,16 @@
 
                   (prn (float (/ (- end start) skip)))
                       
-                  [(not (and start end skip acceptable-slice-count))
+                  [(not (and start end skip acceptable-slice-count (> end start)))
                    {::start start ::end end ::skip skip}]))
-  :handle-ok (fn [ctx] (let [start (::start ctx)
+  :exists? (fn [ctx] (let [start (::start ctx)
                              end (::end ctx)
                              skip (::skip ctx)
                              mp3-f (generate-splice user entity start end skip)
-                             spectrogram-f (generate-spectrogram user entity start end skip mp3-f)]
-            (new FileInputStream spectrogram-f))))
+                             spectrogram-f (when mp3-f (generate-spectrogram user entity start end skip mp3-f))]
+            ; May return nil if nothing matched.
+                       [spectrogram-f {::spectrogram-f spectrogram-f}]))
+  :handle-ok (fn [ctx] (new FileInputStream (::spectrogram-f ctx))))
 
   (defn authenticated? [username password]
   (when (and 
@@ -228,12 +234,27 @@
                                          "User-Id" (::user-id ctx)}                               
                                 :body "ok"})))
 
+(defresource recordings-info
+  [user entity]
+  :available-media-types ["application/json"]
+  :handle-ok (fn [ctx]
+              (let [files (.listFiles (new File (new File (:storage-dir config)) (str "recordings/" user "/" entity)))
+                    files (filter #(.endsWith (.getName %) ".wav") files)
+                    timestamps (map (fn [f]
+                                     (let [nom (.getName f)
+                                           timestamp-str (.substring nom 0 (- (.length nom) 4))
+                                           timestamp (parse-int timestamp-str)]
+                                        timestamp)) files)
+                    earliest (apply min timestamps)
+                    latest (apply max timestamps)]
+                {:earliest earliest :latest latest :max-slice-count max-slice-count})))
+
 (defroutes app-routes
   (ANY "/login" [] (wrap-basic-authentication login authenticated?))
   (ANY "/authenticated" [] (authenticated))
-  
   (ANY "/recordings/:user/:entity/:duration/:filename" [user entity duration filename] (recording user entity duration filename))
   (ANY "/recordings/:user/:entity/timelapse" [user entity] (timelapse-recording user entity))
+  (ANY "/recordings/:user/:entity" [user entity] (recordings-info user entity))
   (ANY "/spectrograms/:user/:entity/timelapse" [user entity] (timelapse-spectrogram user entity))
   (ANY "/recordings" recordings)
   (route/resources "/" {:root "public/index.html"})
