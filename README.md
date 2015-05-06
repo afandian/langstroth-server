@@ -7,6 +7,10 @@ This will currently accept recordings of any length, but truncate them to 1 seco
 2. SoX can't splice MP3s without a hiccup, so we need to store WAVs
 3. and WAVs are huge (44k/sec) so they need cutting down.
 
+Uses SoX to splice sound files and generate spectrograms.
+
+![screenshot](./doc/screenshot.png)
+
 Work in progress.
 
 ## License
